@@ -172,16 +172,218 @@ class Decoder(srd.Decoder):
         Main decode method.
 
         This method is called by the sigrokdecode backend to decode samples.
-        For non-stacked decoders, this method uses self.wait() to get samples.
+        Uses self.wait() for edge-triggered sample handling.
         '''
-        # TODO: Implement decode logic in Task 6
-        # For now, this is a skeleton that waits for samples
-        while True:
-            # Wait for samples
-            (data,) = self.wait()
+        # Get timing parameters in samples
+        bit_period_s = self.timing['bit_period_us'] / 1e6  # Convert to seconds
+        samples_per_bit = int(bit_period_s * self.samplerate) if self.samplerate else 0
+        idle_threshold_samples = int(samples_per_bit * MIN_IDLE_BIT_PERIODS)
+        threshold_samples = int(samples_per_bit * BIT_THRESHOLD)
 
-            # Placeholder: actual decode logic will be implemented in Task 6
-            pass
+        # Valid pulse width range (with tolerance)
+        t0h_min_samples = int(samples_per_bit * 0.375 * (1 - TIMING_TOLERANCE))  # T0H - 15%
+        t1h_max_samples = int(samples_per_bit * 0.75 * (1 + TIMING_TOLERANCE))   # T1H + 15%
+        max_bit_gap_samples = int(samples_per_bit * 2.3)  # Max gap between bits
+
+        # State machine constants
+        STATE_IDLE = 'IDLE'
+        STATE_SYNC = 'SYNC'
+        STATE_FRAME = 'FRAME'
+        STATE_DECODE = 'DECODE'
+
+        # Channel state aliases (single channel for now)
+        channel_state = self.states[0]
+
+        # Initialize edge tracking
+        last_pin_state = None
+        rising_edge_sample = 0
+
+        while True:
+            # Wait for samples with edge conditions
+            # Pattern: (condition,) - wait for rising or falling edge
+            (data,) = self.wait({0: 'e'})  # 'e' = edge on channel 0
+            current_sample = self.samplenum
+            current_pin = data
+
+            # Get current channel state
+            state = channel_state['state']
+
+            # Detect edge type
+            if last_pin_state is None:
+                last_pin_state = current_pin
+                continue
+
+            is_rising = (last_pin_state == 0 and current_pin == 1)
+            is_falling = (last_pin_state == 1 and current_pin == 0)
+            last_pin_state = current_pin
+
+            # === IDLE STATE ===
+            if state == STATE_IDLE:
+                if is_rising:
+                    # Check if gap since last edge is sufficient
+                    gap = current_sample - channel_state['last_edge_sample']
+                    if gap > idle_threshold_samples:
+                        # Valid frame start detected
+                        channel_state['state'] = STATE_SYNC
+                        rising_edge_sample = current_sample
+                        channel_state['frame_start_sample'] = current_sample
+                    else:
+                        # Noise or within previous frame, stay in IDLE
+                        channel_state['last_edge_sample'] = current_sample
+
+            # === SYNC STATE ===
+            elif state == STATE_SYNC:
+                if is_falling:
+                    high_time = current_sample - rising_edge_sample
+                    # Validate pulse width
+                    if t0h_min_samples <= high_time <= t1h_max_samples:
+                        # Valid first bit, transition to FRAME
+                        channel_state['state'] = STATE_FRAME
+                        channel_state['bit_count'] = 1
+                        channel_state['frame_bits'] = [1 if high_time > threshold_samples else 0]
+                        channel_state['last_edge_sample'] = current_sample
+                        # Emit bit annotation
+                        bit_value = channel_state['frame_bits'][0]
+                        self.put(rising_edge_sample, current_sample, self.out_ann,
+                                 [ANN_BIT, [f'Bit {bit_value}', f'{bit_value}']])
+                    else:
+                        # Invalid pulse width, resync
+                        channel_state['state'] = STATE_IDLE
+                        channel_state['bit_count'] = 0
+                        channel_state['frame_bits'] = []
+                        channel_state['last_edge_sample'] = current_sample
+                else:
+                    # Unexpected rising edge in SYNC, restart
+                    channel_state['state'] = STATE_IDLE
+                    channel_state['last_edge_sample'] = current_sample
+
+            # === FRAME STATE ===
+            elif state == STATE_FRAME:
+                if is_rising:
+                    rising_edge_sample = current_sample
+                    # Check for timeout/gap between bits
+                    gap = current_sample - channel_state['last_edge_sample']
+                    if gap > max_bit_gap_samples:
+                        # Lost sync, reset to IDLE
+                        channel_state['state'] = STATE_IDLE
+                        channel_state['bit_count'] = 0
+                        channel_state['frame_bits'] = []
+                        channel_state['last_edge_sample'] = current_sample
+                        continue
+                    channel_state['last_edge_sample'] = current_sample
+
+                elif is_falling:
+                    high_time = current_sample - rising_edge_sample
+                    # Validate pulse width
+                    if not (t0h_min_samples <= high_time <= t1h_max_samples):
+                        # Invalid pulse - noise, resync
+                        channel_state['state'] = STATE_IDLE
+                        channel_state['bit_count'] = 0
+                        channel_state['frame_bits'] = []
+                        channel_state['last_edge_sample'] = current_sample
+                        continue
+
+                    # Determine bit value
+                    bit_value = 1 if high_time > threshold_samples else 0
+                    channel_state['frame_bits'].append(bit_value)
+                    channel_state['bit_count'] += 1
+                    channel_state['last_edge_sample'] = current_sample
+
+                    # Emit bit annotation
+                    bit_idx = channel_state['bit_count'] - 1
+                    self.put(rising_edge_sample, current_sample, self.out_ann,
+                             [ANN_BIT, [f'Bit {bit_idx}: {bit_value}', f'{bit_value}']])
+
+                    # Check if frame complete (16 bits)
+                    if channel_state['bit_count'] >= 16:
+                        channel_state['state'] = STATE_DECODE
+
+            # === DECODE STATE ===
+            elif state == STATE_DECODE:
+                # Process the frame
+                self._decode_frame(channel_state)
+                # Reset to IDLE
+                channel_state['state'] = STATE_IDLE
+                channel_state['bit_count'] = 0
+                channel_state['frame_bits'] = []
+                channel_state['last_edge_sample'] = current_sample
+
+    def _decode_frame(self, channel_state):
+        '''
+        Decode a complete 16-bit DShot frame.
+
+        Frame structure (MSB first):
+        - Bits 0-10: Throttle value (11 bits)
+        - Bit 11: Telemetry request
+        - Bits 12-15: CRC (4 bits)
+        '''
+        frame_bits = channel_state['frame_bits']
+        frame_start = channel_state['frame_start_sample']
+
+        if len(frame_bits) != 16:
+            return  # Should not happen
+
+        # Assemble 16-bit value (MSB first)
+        raw_value = 0
+        for bit in frame_bits:
+            raw_value = (raw_value << 1) | bit
+
+        # Extract fields
+        throttle = (raw_value >> 5) & 0x7FF  # Bits 0-10 (11 bits)
+        telemetry = (raw_value >> 4) & 0x01   # Bit 11
+        received_crc = raw_value & 0x0F       # Bits 12-15 (4 bits)
+
+        # Calculate CRC
+        calculated_crc = self.calculate_crc(throttle, telemetry)
+        crc_valid = (calculated_crc == received_crc)
+
+        # Find frame end (approximate - last bit falling edge)
+        # We'll use the last bit position from frame_bits
+        frame_end = self.samplenum
+
+        # Emit frame annotation
+        self.put(frame_start, frame_end, self.out_ann,
+                 [ANN_FRAME, [f'Frame: 0x{raw_value:04X}', f'0x{raw_value:04X}']])
+
+        # Emit throttle annotation
+        if throttle < THROTTLE_MIN:
+            # Special command
+            cmd_name = self.get_special_command_name(throttle)
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_SPECIAL_CMD, [f'Special: {cmd_name}', f'{cmd_name}']])
+        else:
+            # Normal throttle
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_THROTTLE, [f'Throttle: {throttle}', f'{throttle}']])
+
+        # Emit telemetry annotation
+        tel_str = 'Telemetry: Yes' if telemetry else 'Telemetry: No'
+        self.put(frame_start, frame_end, self.out_ann,
+                 [ANN_TELEMETRY, [tel_str, 'TEL' if telemetry else 'NO_TEL']])
+
+        # Emit CRC annotation
+        if crc_valid:
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_CRC, [f'CRC OK: 0x{received_crc:X}', f'CRC OK']])
+        else:
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_CRC, [f'CRC ERR: got 0x{received_crc:X}, exp 0x{calculated_crc:X}', f'CRC ERR']])
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_ERROR, [f'CRC mismatch: got 0x{received_crc:X}, expected 0x{calculated_crc:X}', 'CRC Error']])
+
+        # Emit Python output for stacked decoders
+        frame_data = {
+            'raw': raw_value,
+            'throttle': throttle,
+            'telemetry': telemetry,
+            'crc_received': received_crc,
+            'crc_calculated': calculated_crc,
+            'crc_valid': crc_valid,
+            'start_sample': frame_start,
+            'end_sample': frame_end,
+            'variant': self.variant,
+        }
+        self.put(frame_start, frame_end, self.out_python, frame_data)
 
     def put(self, start_sample, end_sample, output_id, data):
         '''

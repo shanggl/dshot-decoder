@@ -52,3 +52,25 @@
 - eRPM decode stub: decode_erpm() and decode_gcr() for bidirectional telemetry
 - Python syntax verified with py_compile
 - sigrokdecode module is runtime dependency (not installed in dev environment)
+
+### 2026-03-13 Task 6: Core Decoder Implementation
+- Implemented decode() method with edge-triggered state machine
+- State machine: IDLE → SYNC → FRAME → DECODE transitions
+- Edge detection: self.wait({0: 'e'}) for rising/falling edge detection
+- Bit threshold: high_time > 0.56 * bit_period → logic 1
+- Timing tolerance: ±15% for T0H_min to T1H_max range
+- Idle detection: gap > 2× bit_period for frame start
+- Frame timeout: gap > 2.3× bit_period triggers resync
+- CRC validation: (value ^ (value >> 4) ^ (value >> 8)) & 0x0F
+- Annotations emitted for: bit, frame, throttle, special command, telemetry, CRC, error
+- Python dict output for stacked decoders with raw, throttle, telemetry, crc_valid fields
+- decode_erpm() and decode_gcr() are stubs for Task 9 (bidirectional)
+
+### Gotchas
+- self.wait({0: 'e'}) returns tuple (data,) not just data
+- last_pin_state must be tracked to determine edge type (rising vs falling)
+- Frame bits collected MSB first, shifted left into raw_value
+- throttle = (raw_value >> 5) & 0x7FF extracts bits 0-10
+- telemetry = (raw_value >> 4) & 0x01 extracts bit 11
+- crc = raw_value & 0x0F extracts bits 12-15
+- CRC is calculated on (throttle << 1) | telemetry, not just throttle
