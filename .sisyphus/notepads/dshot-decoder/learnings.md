@@ -116,14 +116,13 @@
 - Task 11: Special command names (48 commands)
 - Task 12: Verification (syntax and structure verified)
 
-### Manual Test Commands (for PulseView/sigrok-cli)
-```bash
-# Test DShot300 unidirectional
-sigrok-cli -i capture.sr -P dshot:variant=DSHOT300:mode=unidirectional
-
-# Test DShot300 bidirectional with eRPM
-sigrok-cli -i capture.sr -P dshot:variant=DSHOT300:mode=bidirectional
-
-# Test 4-channel setup
-sigrok-cli -i capture.sr -P dshot:variant=DSHOT600:mode=unidirectional:num_channels=4
 ```
+
+### 2026-03-13 Final Status
+- All 36 tasks completed (F3 blocked pending external verification)
+- F3 (Manual QA) blocked: requires sigrok/PulseView and DShot captures
+- Automated verification complete: syntax, structure, constants, features
+- Blocker documented in .sisyphus/evidence/final-qa/F3-blocked.md
+
+### Integration
+To use: Copy decoders/dshot/ to atk_libsigrokdecode/decoders/
