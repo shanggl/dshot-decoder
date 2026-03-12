@@ -192,10 +192,10 @@ Max Concurrent: 4
   - DShot protocol specification: https://betaflight.com/docs/development/API/Dshot
 
   **Acceptance Criteria**:
-  - [ ] Document created with file structure pattern
-  - [ ] Document created with annotation pattern examples
-  - [ ] Document created with Python output pattern
-  - [ ] At least 2 similar decoders analyzed
+  - [x] Document created with file structure pattern
+  - [x] Document created with annotation pattern examples
+  - [x] Document created with Python output pattern
+  - [x] At least 2 similar decoders analyzed
 
   **QA Scenarios**:
   ```
@@ -242,9 +242,9 @@ Max Concurrent: 4
   - DShot timing specifications from research
 
   **Acceptance Criteria**:
-  - [ ] Test strategy documented
-  - [ ] Decision made: existing captures OR synthetic data OR both
-  - [ ] Plan for obtaining test data for all 6 combinations
+  - [x] Test strategy documented
+  - [x] Decision made: existing captures OR synthetic data OR both
+  - [x] Plan for obtaining test data for all 6 combinations
 
   **QA Scenarios**:
   ```
@@ -294,10 +294,10 @@ Max Concurrent: 4
     | 600   | 1.25     | 0.625    | 1.67            |
 
   **Acceptance Criteria**:
-  - [ ] Algorithm document with pseudocode
-  - [ ] Timing tolerance values defined
-  - [ ] Edge cases documented (resync, partial frames)
-  - [ ] Frame detection state machine defined
+  - [x] Algorithm document with pseudocode
+  - [x] Timing tolerance values defined
+  - [x] Edge cases documented (resync, partial frames)
+  - [x] Frame detection state machine defined
 
   **QA Scenarios**:
   ```
@@ -354,10 +354,10 @@ Max Concurrent: 4
   - DShot frame structure from research
 
   **Acceptance Criteria**:
-  - [ ] Annotation types defined with IDs
-  - [ ] Annotation rows defined
-  - [ ] Python output structure defined with types
-  - [ ] Example output documented
+  - [x] Annotation types defined with IDs
+  - [x] Annotation rows defined
+  - [x] Python output structure defined with types
+  - [x] Example output documented
 
   **QA Scenarios**:
   ```
@@ -413,10 +413,10 @@ Max Concurrent: 4
   - DShot timing constants from research
 
   **Acceptance Criteria**:
-  - [ ] `decoders/dshot/__init__.py` created with docstring
-  - [ ] `decoders/dshot/lists.py` created with all constants
-  - [ ] `decoders/dshot/pd.py` skeleton created with Decoder class
-  - [ ] Decoder loads in sigrok without errors (empty decode())
+  - [x] `decoders/dshot/__init__.py` created with docstring
+  - [x] `decoders/dshot/lists.py` created with all constants
+  - [x] `decoders/dshot/pd.py` skeleton created with Decoder class
+  - [x] Decoder loads in sigrok without errors (empty decode())
 
   **QA Scenarios**:
   ```
@@ -484,11 +484,11 @@ Max Concurrent: 4
   - DShot timing: DShot300 has T1H=2.5µs, T0H=1.25µs, bit=3.33µs
 
   **Acceptance Criteria**:
-  - [ ] Frame detection works for DShot300 captures
-  - [ ] CRC validation implemented
-  - [ ] Throttle values decoded correctly
-  - [ ] Annotations output correctly
-  - [ ] Python dict output for stacking
+  - [x] Frame detection works for DShot300 captures
+  - [x] CRC validation implemented
+  - [x] Throttle values decoded correctly
+  - [x] Annotations output correctly
+  - [x] Python dict output for stacking
 
   **QA Scenarios**:
   ```
@@ -554,10 +554,10 @@ Max Concurrent: 4
   - Existing DShot300 implementation
 
   **Acceptance Criteria**:
-  - [ ] DShot150 timing implemented
-  - [ ] DShot600 timing implemented
-  - [ ] All three variants tested
-  - [ ] Sample rate warnings correct for each variant
+  - [x] DShot150 timing implemented
+  - [x] DShot600 timing implemented
+  - [x] All three variants tested
+  - [x] Sample rate warnings correct for each variant
 
   **QA Scenarios**:
   ```
@@ -608,11 +608,11 @@ Max Concurrent: 4
   - Task 4 specification
 
   **Acceptance Criteria**:
-  - [ ] Optional channels defined for ESC 2-4
-  - [ ] num_channels option added
-  - [ ] Independent state per channel
-  - [ ] Separate annotation streams per channel
-  - [ ] Channel labels "ESC 1" - "ESC 4"
+  - [x] Optional channels defined for ESC 2-4
+  - [x] num_channels option added
+  - [x] Independent state per channel
+  - [x] Separate annotation streams per channel
+  - [x] Channel labels "ESC 1" - "ESC 4"
 
   **QA Scenarios**:
   ```
@@ -678,12 +678,12 @@ Max Concurrent: 4
   - eRPM frame structure: 3-bit shift + 9-bit period + 4-bit CRC
 
   **Acceptance Criteria**:
-  - [ ] Bidirectional mode option works
-  - [ ] Signal inversion implemented
-  - [ ] Inverted CRC calculation works
-  - [ ] GCR decoding implemented
-  - [ ] eRPM extracted correctly
-  - [ ] Missing telemetry handled gracefully
+  - [x] Bidirectional mode option works
+  - [x] Signal inversion implemented
+  - [x] Inverted CRC calculation works
+  - [x] GCR decoding implemented
+  - [x] eRPM extracted correctly
+  - [x] Missing telemetry handled gracefully
 
   **QA Scenarios**:
   ```
@@ -752,11 +752,11 @@ Max Concurrent: 4
   - Task 4: Output specification (error types)
 
   **Acceptance Criteria**:
-  - [ ] CRC error annotation works
-  - [ ] Timing error annotation works
-  - [ ] Frame interval warning works
-  - [ ] Sample rate warning works
-  - [ ] Python output includes error field
+  - [x] CRC error annotation works
+  - [x] Timing error annotation works
+  - [x] Frame interval warning works
+  - [x] Sample rate warning works
+  - [x] Python output includes error field
 
   **QA Scenarios**:
   ```
@@ -841,10 +841,10 @@ Max Concurrent: 4
     - 42-47: Telemetry commands
 
   **Acceptance Criteria**:
-  - [ ] All 48 special commands defined (0-47)
-  - [ ] Command names displayed in annotations
-  - [ ] special_command field in Python output
-  - [ ] Disarm (0) handled specially
+  - [x] All 48 special commands defined (0-47)
+  - [x] Command names displayed in annotations
+  - [x] special_command field in Python output
+  - [x] Disarm (0) handled specially
 
   **QA Scenarios**:
   ```
@@ -902,11 +902,11 @@ Max Concurrent: 4
   - All previous tasks for verification
 
   **Acceptance Criteria**:
-  - [ ] Test data available for all 6 combinations
-  - [ ] Verification report created
-  - [ ] All variants tested and working
-  - [ ] All error types tested
-  - [ ] Multi-channel tested
+  - [x] Test data available for all 6 combinations
+  - [x] Verification report created
+  - [x] All variants tested and working
+  - [x] All error types tested
+  - [x] Multi-channel tested
 
   **QA Scenarios**:
   ```
