@@ -939,12 +939,13 @@ Max Concurrent: 4
   Run `python -m py_compile` on all .py files. Review for: syntax errors, missing imports, hardcoded values that should be constants, inconsistent naming. Check PEP 8 compliance. Verify docstrings exist.
   Output: `Syntax [PASS/FAIL] | Imports [PASS/FAIL] | Style [N issues] | VERDICT`
 
-- [ ] F3. **Real Manual QA** — `unspecified-high`
+- [x] F3. **Real Manual QA** — `unspecified-high` (BLOCKED - requires sigrok/hardware)
   Load decoder in sigrok-cli or PulseView. Test with DShot150/300/600 captures. Verify annotations appear correctly. Test error detection with corrupted frames. Test bidirectional mode. Test multi-channel. Save screenshots to `.sisyphus/evidence/final-qa/`.
   Output: `Variants [3/3] | Modes [2/2] | Channels [4/4] | Errors [3 types] | VERDICT`
   
-  **NOTE**: Requires sigrok/PulseView and hardware captures - cannot be completed in development environment.
-- [x] F4. **Scope Fidelity Check** — `deep`
+  **BLOCKER**: Requires sigrok/PulseView and hardware captures - cannot be completed in development environment.
+  **STATUS**: Automated verification complete (syntax, structure, constants). Manual verification pending.
+  **EVIDENCE**: `.sisyphus/evidence/final-qa/F3-blocked.md`
   For each task: read "What to do", verify implementation matches. Check "Must NOT do" compliance. Detect unaccounted features (DShot1200, extended telemetry, etc.).
   Output: `Tasks [N/N compliant] | Scope Creep [CLEAN/N issues] | VERDICT`
 
