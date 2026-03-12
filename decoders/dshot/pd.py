@@ -158,6 +158,11 @@ class Decoder(srd.Decoder):
                 'frame_start_sample': 0,
                 'rising_edge_sample': 0,
                 'last_pin': None,
+                # Bidirectional telemetry state
+                'telemetry_requested': False,
+                'telemetry_start_sample': 0,
+                'falling_edge_sample': 0,
+                'last_fc_frame': None,
             })
     def _check_sample_rate(self):
         '''Check if sample rate is sufficient for reliable decoding.'''
@@ -192,12 +197,22 @@ class Decoder(srd.Decoder):
         t1h_max_samples = int(samples_per_bit * 0.75 * (1 + TIMING_TOLERANCE))   # T1H + 15%
         max_bit_gap_samples = int(samples_per_bit * 2.3)  # Max gap between bits
 
+        # Bidirectional telemetry timing
+        # ESC responds ~30us after FC frame, with timeout window of ~100us
+        telemetry_timeout_samples = int(self.samplerate * 100e-6) if self.samplerate else 0
+        telemetry_start_window = int(self.samplerate * 30e-6) if self.samplerate else 0  # Min wait before ESC response
+
         # State machine constants
         STATE_IDLE = 'IDLE'
         STATE_SYNC = 'SYNC'
         STATE_FRAME = 'FRAME'
         STATE_DECODE = 'DECODE'
+        STATE_WAITING_TELEMETRY = 'WAITING_TELEMETRY'
+        STATE_TELEMETRY_FRAME = 'TELEMETRY_FRAME'
+        STATE_DECODE_TELEMETRY = 'DECODE_TELEMETRY'
 
+        # Check if bidirectional mode is enabled
+        is_bidirectional = (self.mode == 'bidirectional')
         while True:
             # Build wait condition for all active channels
             wait_cond = {ch: 'e' for ch in self.active_channels}
@@ -293,12 +308,105 @@ class Decoder(srd.Decoder):
 
                 # === DECODE STATE ===
                 elif state == STATE_DECODE:
-                    self._decode_frame(ch_state, ch)
-                    ch_state['state'] = STATE_IDLE
+                    fc_frame = self._decode_frame(ch_state, ch)
                     ch_state['bit_count'] = 0
                     ch_state['frame_bits'] = []
                     ch_state['last_edge_sample'] = current_sample
 
+                    # In bidirectional mode with telemetry request, wait for ESC response
+                    if is_bidirectional and fc_frame and fc_frame.get('telemetry', 0):
+                        ch_state['state'] = STATE_WAITING_TELEMETRY
+                        ch_state['telemetry_requested'] = True
+                        ch_state['telemetry_start_sample'] = current_sample
+                        ch_state['last_fc_frame'] = fc_frame
+                    else:
+                        ch_state['state'] = STATE_IDLE
+
+                # === WAITING_TELEMETRY STATE ===
+                # Wait for ESC response after FC frame (bidirectional mode)
+                # ESC responds with INVERTED signal: falling edge = bit start
+                elif state == STATE_WAITING_TELEMETRY:
+                    time_since_frame = current_sample - ch_state['telemetry_start_sample']
+
+                    # Check for timeout (no ESC response)
+                    if time_since_frame > telemetry_timeout_samples:
+                        ch_state['state'] = STATE_IDLE
+                        ch_state['telemetry_requested'] = False
+                        ch_state['last_fc_frame'] = None
+                        # Emit warning about missing telemetry
+                        self.put(ch_state['telemetry_start_sample'], current_sample, self.out_ann,
+                                 [ANN_WARNING, [f'CH{ch+1} No ESC telemetry response', 'NO_TEL_RESP']])
+                        continue
+
+                    # In bidirectional mode, ESC response starts with FALLING edge (inverted signal)
+                    # Wait for falling edge to start receiving telemetry frame
+                    if is_falling:
+                        # Check if enough time has passed for ESC to start responding
+                        if time_since_frame >= telemetry_start_window:
+                            ch_state['state'] = STATE_TELEMETRY_FRAME
+                            ch_state['bit_count'] = 1
+                            ch_state['frame_bits'] = []
+                            ch_state['frame_start_sample'] = current_sample  # Telemetry frame starts here
+                            ch_state['falling_edge_sample'] = current_sample
+                            ch_state['last_edge_sample'] = current_sample
+
+                # === TELEMETRY_FRAME STATE ===
+                # Receive ESC telemetry frame (21 bits, GCR encoded, INVERTED signal)
+                # Inverted signal: falling edge = bit start, low pulse = logic 1, high pulse = logic 0
+                elif state == STATE_TELEMETRY_FRAME:
+                    if is_falling:
+                        # Falling edge = start of new bit in inverted signal
+                        ch_state['falling_edge_sample'] = current_sample
+                        gap = current_sample - ch_state['last_edge_sample']
+                        if gap > max_bit_gap_samples:
+                            # Timeout - lost sync
+                            ch_state['state'] = STATE_IDLE
+                            ch_state['bit_count'] = 0
+                            ch_state['frame_bits'] = []
+                            ch_state['telemetry_requested'] = False
+                            ch_state['last_edge_sample'] = current_sample
+                            continue
+                        ch_state['last_edge_sample'] = current_sample
+
+                    elif is_rising:
+                        # Rising edge = end of bit in inverted signal
+                        # Measure LOW time (time signal was LOW before rising)
+                        low_time = current_sample - ch_state['falling_edge_sample']
+
+                        # Validate pulse width
+                        if not (t0h_min_samples <= low_time <= t1h_max_samples):
+                            ch_state['state'] = STATE_IDLE
+                            ch_state['bit_count'] = 0
+                            ch_state['frame_bits'] = []
+                            ch_state['telemetry_requested'] = False
+                            ch_state['last_edge_sample'] = current_sample
+                            continue
+
+                        # INVERTED LOGIC: low_time > threshold means LONG low = logic 0
+                        # Short low (like T0H in normal) = logic 1, Long low (like T1H) = logic 0
+                        # Inverted: short pulse = 1, long pulse = 0
+                        bit_value = 0 if low_time > threshold_samples else 1
+                        ch_state['frame_bits'].append(bit_value)
+                        ch_state['bit_count'] += 1
+                        ch_state['last_edge_sample'] = current_sample
+
+                        bit_idx = ch_state['bit_count'] - 1
+                        self.put(ch_state['falling_edge_sample'], current_sample, self.out_ann,
+                                 [ANN_BIT, [f'CH{ch+1} TelBit {bit_idx}: {bit_value}', f'T{bit_value}']])
+
+                        # Telemetry frame is 21 bits (GCR encoded 16-bit value)
+                        if ch_state['bit_count'] >= 21:
+                            ch_state['state'] = STATE_DECODE_TELEMETRY
+
+                # === DECODE_TELEMETRY STATE ===
+                elif state == STATE_DECODE_TELEMETRY:
+                    self._decode_telemetry_frame(ch_state, ch)
+                    ch_state['state'] = STATE_IDLE
+                    ch_state['bit_count'] = 0
+                    ch_state['frame_bits'] = []
+                    ch_state['telemetry_requested'] = False
+                    ch_state['last_fc_frame'] = None
+                    ch_state['last_edge_sample'] = current_sample
     def _decode_frame(self, channel_state, channel_idx=0):
         '''
         Decode a complete 16-bit DShot frame.
@@ -377,6 +485,7 @@ class Decoder(srd.Decoder):
         }
         self.put(frame_start, frame_end, self.out_python, frame_data)
 
+        return frame_data  # Return frame data for bidirectional mode
     def put(self, start_sample, end_sample, output_id, data):
         '''
         Emit decoded data.
@@ -439,26 +548,27 @@ class Decoder(srd.Decoder):
         '''
         Decode eRPM from bidirectional telemetry frame.
 
-        The telemetry frame is 16 bits:
-        - Bits 0-2: Shift count (3 bits)
-        - Bits 3-11: Period base (9 bits)
-        - Bits 12-15: CRC (4 bits)
+        The telemetry frame is 16 bits (after GCR decoding):
+        - Bits 13-15 (3 bits): Shift count (extends period range)
+        - Bits 4-12 (9 bits): Period base
+        - Bits 0-3 (4 bits): CRC
 
-        eRPM = period_base * 100
+        eRPM = (period_base << shift_count) * 100
 
         Args:
-            raw_value: 16-bit raw value from telemetry frame
+            raw_value: 16-bit raw value from GCR-decoded telemetry frame
 
         Returns:
             Tuple of (eRPM, shift_count, period_base, crc_valid)
         '''
-        # TODO: Implement eRPM decoding in Task 9
-        # Extract shift count, period base, and CRC
+        # Extract shift count (bits 13-15, MSB first)
         shift_count = (raw_value >> 13) & 0x07
+        # Extract period base (bits 4-12, 9 bits)
         period_base = (raw_value >> 4) & 0x1FF
+        # Extract received CRC (bits 0-3)
         received_crc = raw_value & 0x0F
 
-        # Calculate expected CRC
+        # Calculate expected CRC (over bits 4-15, the 12-bit value without CRC)
         value_without_crc = raw_value >> 4
         expected_crc = (value_without_crc ^ (value_without_crc >> 4) ^ (value_without_crc >> 8)) & 0x0F
 
@@ -475,25 +585,114 @@ class Decoder(srd.Decoder):
         Decode GCR-encoded value to original 16-bit value.
 
         GCR encoding maps 16-bit values to 20-bit values for more robust
-        transmission. This function reverses that mapping.
+        transmission. The ESC sends 21 bits: 1 leading bit + 20 GCR bits.
+        This function reverses that mapping.
 
         Args:
-            gcr_value: 21-bit GCR-encoded value
+            gcr_value: 21-bit GCR-encoded value (first bit is ignored)
 
         Returns:
             16-bit decoded value, or None if decoding fails
         '''
-        # TODO: Implement GCR decoding in Task 9
-        # GCR decoding: XOR each bit with the previous bit
-        decoded = gcr_value ^ (gcr_value >> 1)
+        # The ESC sends 21 bits: first bit is 0 (sync), then 20 GCR bits
+        # Extract the 20 GCR bits (mask off the leading bit)
+        gcr_20bit = gcr_value & 0xFFFFF  # Keep lower 20 bits
 
-        # Extract 5-bit groups and map back to 4-bit nibbles
+        # GCR decoding: XOR each bit with the previous bit
+        # This reverses the GCR encoding transformation
+        decoded = gcr_20bit ^ (gcr_20bit >> 1)
+
+        # Extract 4 groups of 5-bit symbols and map back to 4-bit nibbles
+        # GCR encoding: nibble[0] -> symbol[0], nibble[1] -> symbol[1], etc.
+        # Bits are stored MSB first, so nibble[0] is highest bits
         result = 0
         for i in range(4):
-            gcr_nibble = (decoded >> (i * 5)) & 0x1F
-            if gcr_nibble in GCR_NIBBLE_REVERSE:
-                result |= GCR_NIBBLE_REVERSE[gcr_nibble] << (i * 4)
+            # Extract 5-bit symbol (from LSB side, i=0 is LSB nibble)
+            gcr_symbol = (decoded >> (i * 5)) & 0x1F
+            if gcr_symbol in GCR_NIBBLE_REVERSE:
+                result |= GCR_NIBBLE_REVERSE[gcr_symbol] << (i * 4)
             else:
                 return None  # Invalid GCR encoding
 
         return result
+
+    def _decode_telemetry_frame(self, channel_state, channel_idx=0):
+        '''
+        Decode a 21-bit GCR-encoded ESC telemetry frame.
+
+        The frame contains:
+        - 1 leading sync bit (ignored)
+        - 20 bits of GCR-encoded data
+
+        After GCR decoding, the 16-bit value contains:
+        - Bits 13-15: Shift count (3 bits)
+        - Bits 4-12: Period base (9 bits)
+        - Bits 0-3: CRC (4 bits)
+
+        Args:
+            channel_state: Channel state dictionary
+            channel_idx: Channel index for annotations
+        '''
+        frame_bits = channel_state['frame_bits']
+        frame_start = channel_state['frame_start_sample']
+        fc_frame = channel_state.get('last_fc_frame', {})
+
+        if len(frame_bits) != 21:
+            return  # Should not happen
+
+        # Assemble 21-bit GCR value (MSB first)
+        gcr_value = 0
+        for bit in frame_bits:
+            gcr_value = (gcr_value << 1) | bit
+
+        # Decode GCR to 16-bit value
+        decoded_value = self.decode_gcr(gcr_value)
+
+        frame_end = self.samplenum
+        ch_label = f'ESC {channel_idx + 1}'
+
+        if decoded_value is None:
+            # GCR decoding failed
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_ERROR, [f'{ch_label} GCR decode failed', 'GCR ERR']])
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_FRAME, [f'{ch_label} Telemetry: GCR Error', 'TEL_GCR_ERR']])
+            return
+
+        # Decode eRPM from the decoded value
+        erpm, shift_count, period_base, crc_valid = self.decode_erpm(decoded_value)
+
+        # Emit frame annotation
+        self.put(frame_start, frame_end, self.out_ann,
+                 [ANN_FRAME, [f'{ch_label} Telemetry: 0x{decoded_value:04X}', f'0x{decoded_value:04X}']])
+
+        # Emit eRPM annotation
+        if crc_valid:
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_ERPM, [f'{ch_label} eRPM: {erpm}', f'{erpm}']])
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_CRC, [f'{ch_label} CRC OK', 'CRC OK']])
+        else:
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_ERPM, [f'{ch_label} eRPM: {erpm} (CRC ERR)', f'{erpm}']])
+            self.put(frame_start, frame_end, self.out_ann,
+                     [ANN_CRC, [f'{ch_label} CRC ERR', 'CRC ERR']])
+
+        # Emit Python output for stacked decoders
+        telemetry_data = {
+            'type': 'telemetry',
+            'raw_gcr': gcr_value,
+            'decoded': decoded_value,
+            'erpm': erpm,
+            'shift_count': shift_count,
+            'period_base': period_base,
+            'crc_valid': crc_valid,
+            'start_sample': frame_start,
+            'end_sample': frame_end,
+            'variant': self.variant,
+            'channel': channel_idx,
+            'fc_frame': fc_frame,  # Link to FC frame that requested this telemetry
+        }
+        self.put(frame_start, frame_end, self.out_python, telemetry_data)
+
+        return telemetry_data
