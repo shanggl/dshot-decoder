@@ -33,6 +33,7 @@ ANN_SPECIAL_CMD = 5
 ANN_ERPM = 6
 ANN_ERROR = 7
 ANN_WARNING = 8
+ANN_SUMMARY = 9
 
 
 class Decoder(srd.Decoder):
@@ -49,6 +50,7 @@ class Decoder(srd.Decoder):
     longname = 'DShot ESC Protocol'
     desc = 'Digital Shot protocol for FC-ESC communication (DShot150/300/600, uni/bidirectional).'
     license = 'gplv3+'
+    tags = ['ESC', 'RC']
 
     inputs = ['logic']
     outputs = ['dshot']
@@ -86,12 +88,14 @@ class Decoder(srd.Decoder):
         ('erpm', 'eRPM'),
         ('error', 'Error'),
         ('warning', 'Warning'),
+        ('summary', 'Summary'),
     )
 
     # Annotation rows for grouping
     annotation_rows = (
         ('bits', 'Bits', (ANN_BIT,)),
         ('frames', 'Frames', (ANN_FRAME,)),
+        ('summary-row', 'Summary', (ANN_SUMMARY,)),
         ('values', 'Values', (ANN_THROTTLE, ANN_TELEMETRY, ANN_CRC, ANN_SPECIAL_CMD, ANN_ERPM)),
         ('errors', 'Errors', (ANN_ERROR, ANN_WARNING)),
     )
@@ -444,6 +448,18 @@ class Decoder(srd.Decoder):
         self.put(frame_start, frame_end, self.out_ann,
                  [ANN_FRAME, [f'{ch_label} Frame: 0x{raw_value:04X}', f'0x{raw_value:04X}']])
 
+        # Emit summary annotation (throttle + telemetry flag in one line)
+        tel_flag = 'T' if telemetry else '-'
+        if throttle < THROTTLE_MIN:
+            cmd_name = self.get_special_command_name(throttle)
+            summary_text = f'{ch_label}: {cmd_name} [{tel_flag}]'
+            summary_short = f'{cmd_name} [{tel_flag}]'
+        else:
+            summary_text = f'{ch_label}: {throttle} [{tel_flag}]'
+            summary_short = f'{throttle} [{tel_flag}]'
+        self.put(frame_start, frame_end, self.out_ann,
+                 [ANN_SUMMARY, [summary_text, summary_short]])
+
         # Emit throttle annotation
         if throttle < THROTTLE_MIN:
             # Special command
@@ -665,6 +681,16 @@ class Decoder(srd.Decoder):
         # Emit frame annotation
         self.put(frame_start, frame_end, self.out_ann,
                  [ANN_FRAME, [f'{ch_label} Telemetry: 0x{decoded_value:04X}', f'0x{decoded_value:04X}']])
+
+        # Emit summary annotation for telemetry (eRPM value)
+        if crc_valid:
+            summary_text = f'{ch_label}: eRPM {erpm} [OK]'
+            summary_short = f'{erpm} [OK]'
+        else:
+            summary_text = f'{ch_label}: eRPM {erpm} [CRC ERR]'
+            summary_short = f'{erpm} [ERR]'
+        self.put(frame_start, frame_end, self.out_ann,
+                 [ANN_SUMMARY, [summary_text, summary_short]])
 
         # Emit eRPM annotation
         if crc_valid:
