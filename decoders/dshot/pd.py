@@ -179,8 +179,9 @@ class Decoder(srd.Decoder):
         if self.samplerate < min_sample_rate:
             # Emit a warning annotation at sample 0
             self.put(0, 0, self.out_ann,
-                     [ANN_WARNING, [f'Warning: Sample rate {self.samplerate} Hz is below '
-                                    f'recommended minimum {min_sample_rate} Hz for {self.variant}']])
+                     [ANN_WARNING, ['Warning: Sample rate {} Hz is below '
+                                    'recommended minimum {} Hz for {}'.format(
+                                        self.samplerate, min_sample_rate, self.variant)]])
 
     def decode(self):
         '''
@@ -266,7 +267,7 @@ class Decoder(srd.Decoder):
                             ch_state['last_edge_sample'] = current_sample
                             # Emit bit annotation
                             self.put(ch_state['frame_start_sample'], current_sample, self.out_ann,
-                                     [ANN_BIT, [f'CH{ch+1} Bit 0: {bit_value}', f'{bit_value}']])
+                                     [ANN_BIT, ['CH{} Bit 0: {}'.format(ch + 1, bit_value), str(bit_value)]])
                         else:
                             ch_state['state'] = STATE_IDLE
                             ch_state['bit_count'] = 0
@@ -305,7 +306,7 @@ class Decoder(srd.Decoder):
 
                         bit_idx = ch_state['bit_count'] - 1
                         self.put(ch_state['rising_edge_sample'], current_sample, self.out_ann,
-                                 [ANN_BIT, [f'CH{ch+1} Bit {bit_idx}: {bit_value}', f'{bit_value}']])
+                                 [ANN_BIT, ['CH{} Bit {}: {}'.format(ch + 1, bit_idx, bit_value), str(bit_value)]])
 
                         if ch_state['bit_count'] >= 16:
                             ch_state['state'] = STATE_DECODE
@@ -339,7 +340,7 @@ class Decoder(srd.Decoder):
                         ch_state['last_fc_frame'] = None
                         # Emit warning about missing telemetry
                         self.put(ch_state['telemetry_start_sample'], current_sample, self.out_ann,
-                                 [ANN_WARNING, [f'CH{ch+1} No ESC telemetry response', 'NO_TEL_RESP']])
+                                 [ANN_WARNING, ['CH{} No ESC telemetry response'.format(ch + 1), 'NO_TEL_RESP']])
                         continue
 
                     # In bidirectional mode, ESC response starts with FALLING edge (inverted signal)
@@ -396,7 +397,7 @@ class Decoder(srd.Decoder):
 
                         bit_idx = ch_state['bit_count'] - 1
                         self.put(ch_state['falling_edge_sample'], current_sample, self.out_ann,
-                                 [ANN_BIT, [f'CH{ch+1} TelBit {bit_idx}: {bit_value}', f'T{bit_value}']])
+                                 [ANN_BIT, ['CH{} TelBit {}: {}'.format(ch + 1, bit_idx, bit_value), 'T{}'.format(bit_value)]])
 
                         # Telemetry frame is 21 bits (GCR encoded 16-bit value)
                         if ch_state['bit_count'] >= 21:
@@ -442,21 +443,21 @@ class Decoder(srd.Decoder):
 
         # Find frame end (approximate - last bit falling edge)
         frame_end = self.samplenum
-        ch_label = f'ESC {channel_idx + 1}'
+        ch_label = 'ESC {}'.format(channel_idx + 1)
 
         # Emit frame annotation
         self.put(frame_start, frame_end, self.out_ann,
-                 [ANN_FRAME, [f'{ch_label} Frame: 0x{raw_value:04X}', f'0x{raw_value:04X}']])
+                 [ANN_FRAME, ['{} Frame: 0x{:04X}'.format(ch_label, raw_value), '0x{:04X}'.format(raw_value)]])
 
         # Emit summary annotation (throttle + telemetry flag in one line)
         tel_flag = 'T' if telemetry else '-'
         if throttle < THROTTLE_MIN:
             cmd_name = self.get_special_command_name(throttle)
-            summary_text = f'{ch_label}: {cmd_name} [{tel_flag}]'
-            summary_short = f'{cmd_name} [{tel_flag}]'
+            summary_text = '{}: {} [{}]'.format(ch_label, cmd_name, tel_flag)
+            summary_short = '{} [{}]'.format(cmd_name, tel_flag)
         else:
-            summary_text = f'{ch_label}: {throttle} [{tel_flag}]'
-            summary_short = f'{throttle} [{tel_flag}]'
+            summary_text = '{}: {} [{}]'.format(ch_label, throttle, tel_flag)
+            summary_short = '{} [{}]'.format(throttle, tel_flag)
         self.put(frame_start, frame_end, self.out_ann,
                  [ANN_SUMMARY, [summary_text, summary_short]])
 
@@ -465,26 +466,28 @@ class Decoder(srd.Decoder):
             # Special command
             cmd_name = self.get_special_command_name(throttle)
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_SPECIAL_CMD, [f'{ch_label} Special: {cmd_name}', f'{cmd_name}']])
+                     [ANN_SPECIAL_CMD, ['{} Special: {}'.format(ch_label, cmd_name), cmd_name]])
         else:
             # Normal throttle
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_THROTTLE, [f'{ch_label} Throttle: {throttle}', f'{throttle}']])
+                     [ANN_THROTTLE, ['{} Throttle: {}'.format(ch_label, throttle), str(throttle)]])
 
         # Emit telemetry annotation
         tel_str = 'Telemetry: Yes' if telemetry else 'Telemetry: No'
         self.put(frame_start, frame_end, self.out_ann,
-                 [ANN_TELEMETRY, [f'{ch_label} {tel_str}', 'TEL' if telemetry else 'NO_TEL']])
+                 [ANN_TELEMETRY, ['{} {}'.format(ch_label, tel_str), 'TEL' if telemetry else 'NO_TEL']])
 
         # Emit CRC annotation
         if crc_valid:
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_CRC, [f'{ch_label} CRC OK: 0x{received_crc:X}', 'CRC OK']])
+                     [ANN_CRC, ['{} CRC OK: 0x{:X}'.format(ch_label, received_crc), 'CRC OK']])
         else:
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_CRC, [f'{ch_label} CRC ERR: got 0x{received_crc:X}, exp 0x{calculated_crc:X}', 'CRC ERR']])
+                     [ANN_CRC, ['{} CRC ERR: got 0x{:X}, exp 0x{:X}'.format(
+                         ch_label, received_crc, calculated_crc), 'CRC ERR']])
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_ERROR, [f'{ch_label} CRC mismatch: got 0x{received_crc:X}, expected 0x{calculated_crc:X}', 'CRC Error']])
+                     [ANN_ERROR, ['{} CRC mismatch: got 0x{:X}, expected 0x{:X}'.format(
+                         ch_label, received_crc, calculated_crc), 'CRC Error']])
 
         # Emit Python output for stacked decoders
         frame_data = {
@@ -557,7 +560,7 @@ class Decoder(srd.Decoder):
             Command name string if throttle is 0-47, None otherwise
         '''
         if throttle < THROTTLE_MIN:
-            return DSHOT_SPECIAL_COMMANDS.get(throttle, f'UNKNOWN_{throttle}')
+            return DSHOT_SPECIAL_COMMANDS.get(throttle, 'UNKNOWN_{}'.format(throttle))
         return None
 
     def decode_erpm(self, raw_value):
@@ -665,14 +668,14 @@ class Decoder(srd.Decoder):
         decoded_value = self.decode_gcr(gcr_value)
 
         frame_end = self.samplenum
-        ch_label = f'ESC {channel_idx + 1}'
+        ch_label = 'ESC {}'.format(channel_idx + 1)
 
         if decoded_value is None:
             # GCR decoding failed
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_ERROR, [f'{ch_label} GCR decode failed', 'GCR ERR']])
+                     [ANN_ERROR, ['{} GCR decode failed'.format(ch_label), 'GCR ERR']])
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_FRAME, [f'{ch_label} Telemetry: GCR Error', 'TEL_GCR_ERR']])
+                     [ANN_FRAME, ['{} Telemetry: GCR Error'.format(ch_label), 'TEL_GCR_ERR']])
             return
 
         # Decode eRPM from the decoded value
@@ -680,29 +683,29 @@ class Decoder(srd.Decoder):
 
         # Emit frame annotation
         self.put(frame_start, frame_end, self.out_ann,
-                 [ANN_FRAME, [f'{ch_label} Telemetry: 0x{decoded_value:04X}', f'0x{decoded_value:04X}']])
+                 [ANN_FRAME, ['{} Telemetry: 0x{:04X}'.format(ch_label, decoded_value), '0x{:04X}'.format(decoded_value)]])
 
         # Emit summary annotation for telemetry (eRPM value)
         if crc_valid:
-            summary_text = f'{ch_label}: eRPM {erpm} [OK]'
-            summary_short = f'{erpm} [OK]'
+            summary_text = '{}: eRPM {} [OK]'.format(ch_label, erpm)
+            summary_short = '{} [OK]'.format(erpm)
         else:
-            summary_text = f'{ch_label}: eRPM {erpm} [CRC ERR]'
-            summary_short = f'{erpm} [ERR]'
+            summary_text = '{}: eRPM {} [CRC ERR]'.format(ch_label, erpm)
+            summary_short = '{} [ERR]'.format(erpm)
         self.put(frame_start, frame_end, self.out_ann,
                  [ANN_SUMMARY, [summary_text, summary_short]])
 
         # Emit eRPM annotation
         if crc_valid:
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_ERPM, [f'{ch_label} eRPM: {erpm}', f'{erpm}']])
+                     [ANN_ERPM, ['{} eRPM: {}'.format(ch_label, erpm), str(erpm)]])
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_CRC, [f'{ch_label} CRC OK', 'CRC OK']])
+                     [ANN_CRC, ['{} CRC OK'.format(ch_label), 'CRC OK']])
         else:
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_ERPM, [f'{ch_label} eRPM: {erpm} (CRC ERR)', f'{erpm}']])
+                     [ANN_ERPM, ['{} eRPM: {} (CRC ERR)'.format(ch_label, erpm), str(erpm)]])
             self.put(frame_start, frame_end, self.out_ann,
-                     [ANN_CRC, [f'{ch_label} CRC ERR', 'CRC ERR']])
+                     [ANN_CRC, ['{} CRC ERR'.format(ch_label), 'CRC ERR']])
 
         # Emit Python output for stacked decoders
         telemetry_data = {
